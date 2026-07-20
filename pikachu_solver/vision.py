@@ -18,7 +18,7 @@ class BoardDetection:
 
 
 class BoardPerceiver:
-    def __init__(self, image_path: str | Path, rows: int = 8, cols: int = 8) -> None:
+    def __init__(self, image_path: str | Path, rows: int = 9, cols: int = 16) -> None:
         self.image_path = Path(image_path)
         self.rows = rows
         self.cols = cols
@@ -26,12 +26,54 @@ class BoardPerceiver:
         if self.image is None:
             raise FileNotFoundError(f"Unable to read image: {self.image_path}")
 
+    # @staticmethod
+    # def _tile_signature(crop: np.ndarray) -> str:
+    #     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    #     gray = cv2.resize(gray, (8, 8), interpolation=cv2.INTER_AREA)
+    #     average = gray.mean()
+    #     return "".join("1" if pixel >= average else "0" for pixel in gray.flatten())
+
     @staticmethod
-    def _tile_signature(crop: np.ndarray) -> str:
-        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        gray = cv2.resize(gray, (8, 8), interpolation=cv2.INTER_AREA)
-        average = gray.mean()
-        return "".join("1" if pixel >= average else "0" for pixel in gray.flatten())
+    def _tile_similarity(img1: np.ndarray, img2: np.ndarray) -> float:
+        """
+        Return similarity in range [-1, 1].
+        """
+
+        # grayscale
+        gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+        gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+
+        # trim edges 10%
+        h, w = gray1.shape
+
+        margin_h = int(h * 0.1)
+        margin_w = int(w * 0.1)
+
+        gray1 = gray1[
+            margin_h:h-margin_h,
+            margin_w:w-margin_w
+        ]
+
+        gray2 = gray2[
+            margin_h:h-margin_h,
+            margin_w:w-margin_w
+        ]
+
+        # Resize
+        gray1 = cv2.resize(gray1, (64, 64))
+        gray2 = cv2.resize(gray2, (64, 64))
+
+        # Blur to avoid noise
+        gray1 = cv2.GaussianBlur(gray1, (3,3), 0)
+        gray2 = cv2.GaussianBlur(gray2, (3,3), 0)
+
+        score = cv2.matchTemplate(
+            gray1,
+            gray2,
+            cv2.TM_CCOEFF_NORMED
+        )[0][0]
+
+        return float(score)
 
     def detect_board(self) -> BoardDetection:
         gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
@@ -60,31 +102,94 @@ class BoardPerceiver:
             cols=self.cols,
         )
 
+    # def extract_board_matrix(self, detection: BoardDetection) -> np.ndarray:
+    #     img = detection.image
+    #     x1, y1, x2, y2 = detection.board_bbox
+    #     board = img[y1:y2, x1:x2]
+    #     h, w = board.shape[:2]
+    #     cell_h = h // detection.rows
+    #     cell_w = w // detection.cols
+
+    #     matrix = np.zeros((detection.rows + 2, detection.cols + 2), dtype=int)
+    #     signatures: dict[str, int] = {}
+    #     next_id = 1
+    #     for r in range(detection.rows):
+    #         for c in range(detection.cols):
+    #             crop = board[r * cell_h:(r + 1) * cell_h, c * cell_w:(c + 1) * cell_w]
+    #             if crop.size == 0:
+    #                 continue
+    #             gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    #             if gray.mean() > 220 and gray.std() < 25:
+    #                 matrix[r + 1, c + 1] = 0
+    #                 continue
+    #             signature = self._tile_signature(crop)
+    #             if signature not in signatures:
+    #                 signatures[signature] = next_id
+    #                 next_id += 1
+    #             matrix[r + 1, c + 1] = signatures[signature]
+    #     return matrix
+
     def extract_board_matrix(self, detection: BoardDetection) -> np.ndarray:
+
         img = detection.image
+
         x1, y1, x2, y2 = detection.board_bbox
+
         board = img[y1:y2, x1:x2]
+
         h, w = board.shape[:2]
+
         cell_h = h // detection.rows
         cell_w = w // detection.cols
 
-        matrix = np.zeros((detection.rows + 2, detection.cols + 2), dtype=int)
-        signatures: dict[str, int] = {}
+        matrix = np.zeros(
+            (detection.rows + 2, detection.cols + 2),
+            dtype=int
+        )
+
+        known_tiles = []
+
         next_id = 1
+
         for r in range(detection.rows):
+
             for c in range(detection.cols):
-                crop = board[r * cell_h:(r + 1) * cell_h, c * cell_w:(c + 1) * cell_w]
+
+                crop = board[
+                    r*cell_h:(r+1)*cell_h,
+                    c*cell_w:(c+1)*cell_w
+                ]
+
                 if crop.size == 0:
                     continue
+
                 gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+
                 if gray.mean() > 220 and gray.std() < 25:
-                    matrix[r + 1, c + 1] = 0
+                    matrix[r+1, c+1] = 0
                     continue
-                signature = self._tile_signature(crop)
-                if signature not in signatures:
-                    signatures[signature] = next_id
+
+                matched = False
+
+                for tile in known_tiles:
+                    score = self._tile_similarity(
+                        crop,
+                        tile["image"]
+                    )
+
+                    if score > 0.45:
+                        matrix[r+1, c+1] = tile["id"]
+                        matched = True
+                        break
+
+                if not matched:
+                    known_tiles.append({
+                        "image": crop.copy(),
+                        "id": next_id
+                    })
+                    matrix[r+1, c+1] = next_id
                     next_id += 1
-                matrix[r + 1, c + 1] = signatures[signature]
+
         return matrix
 
     def visualize_steps(self, image_path: str | Path, steps: List[dict], output_path: str | Path) -> None:
