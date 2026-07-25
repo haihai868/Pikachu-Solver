@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 import torch
-from detect_tiles import load_trained_model, predict_tile
+from handle_board.detect_tiles import load_trained_model, predict_tile
 from typing import Tuple, List
 
 def extract_and_slice_board(image_path, rows=9, cols=16, model_input_size=(48, 48), gap=1)-> Tuple[np.ndarray, List[np.ndarray]]:
@@ -91,7 +91,7 @@ def extract_and_slice_board(image_path, rows=9, cols=16, model_input_size=(48, 4
                 print(f"warning: row {r}, col {c} empty, skip.")
     return board_img, tiles
 
-def encode_board(tiles, rows=9, cols=16) -> np.ndarray:
+def encode_board(tile_list: List[np.ndarray], rows=9, cols=16) -> np.ndarray:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     MODEL_PATH = 'model/pikachu_model_best.pth'

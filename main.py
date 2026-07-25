@@ -34,10 +34,10 @@ def main() -> None:
 
     
     
-    IMAGE_PATH = "../board_img/image1.png"
+    IMAGE_PATH = "board_img/image1.png"
     board, tile_list = extract_and_slice_board(IMAGE_PATH, gap=2)
     matrix = encode_board(tile_list)
-
+    print(matrix)
 
     steps = solve(matrix)
     print(f"Found {len(steps)} steps")

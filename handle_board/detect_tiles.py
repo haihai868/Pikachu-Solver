@@ -1,4 +1,4 @@
-from PikachuCNN import PikachuCNN
+from handle_board.PikachuCNN import PikachuCNN
 import numpy as np
 import torch
 import torchvision.transforms as transforms
