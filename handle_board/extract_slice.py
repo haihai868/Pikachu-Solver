@@ -91,8 +91,10 @@ def extract_and_slice_board(image_path, rows=9, cols=16, model_input_size=(48, 4
                 print(f"warning: row {r}, col {c} empty, skip.")
     return board_img, tiles
 
-def encode_board(tile_list: List[np.ndarray], rows=9, cols=16) -> np.ndarray:
+def encode_board(tile_list: List[np.ndarray], rows=9, cols=16, unique_tiles=36) -> np.ndarray:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    num_tiles_per_type = (rows * cols) / unique_tiles
+    tile_count = {}
 
     MODEL_PATH = 'model/pikachu_model_best.pth'
     bot_model = load_trained_model(MODEL_PATH, device)
@@ -101,6 +103,13 @@ def encode_board(tile_list: List[np.ndarray], rows=9, cols=16) -> np.ndarray:
     labels = []
     for tile in tile_list:
         label = predict_tile(tile, bot_model, device)
+        if label not in tile_count:
+            tile_count[label] = 1
+        elif tile_count[label] >= num_tiles_per_type:
+            raise ValueError(f"Tile type {label} appears more than {num_tiles_per_type} times.")
+        else:
+            tile_count[label] += 1
+
         labels.append(label)
 
     #reshape 9x16
