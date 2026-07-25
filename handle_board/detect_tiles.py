@@ -1,5 +1,5 @@
 from PikachuCNN import PikachuCNN
-
+import numpy as np
 import torch
 import torchvision.transforms as transforms
 from PIL import Image
@@ -13,20 +13,20 @@ def load_trained_model(model_path, device):
     return model.to(device)
 
 
-def predict_tile(image_path, model, device):
-    transform = transforms.Compose([
-        transforms.Resize((48, 48)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-    ])
+VAL_TRANSFORMS = transforms.Compose([
+    transforms.ToPILImage(), # Chuyển đổi np.ndarray thành PIL Image
+    transforms.Resize((48, 48)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+])
 
+def predict_tile(image: np.ndarray, model, device) -> int:
+    # image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-    image = Image.open(image_path).convert('RGB')
-    image_tensor = transform(image)
+    model.eval() 
+    image_tensor = VAL_TRANSFORMS(image)
 
-    # add dim batch_size
     image_tensor = image_tensor.unsqueeze(0).to(device)
-
 
     with torch.no_grad():
         outputs = model(image_tensor)

@@ -1,11 +1,16 @@
 import cv2
 import numpy as np
+import torch
+from detect_tiles import load_trained_model, predict_tile
+from typing import Tuple, List
 
-def extract_and_slice_board(image_path, rows=9, cols=16, model_input_size=(48, 48), gap=1):
+def extract_and_slice_board(image_path, rows=9, cols=16, model_input_size=(48, 48), gap=1)-> Tuple[np.ndarray, List[np.ndarray]]:
     # load image
     img = cv2.imread(image_path)
     if img is None:
         raise ValueError(f"Could not read image from {image_path}")
+
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
     original_img = img.copy()
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -86,14 +91,34 @@ def extract_and_slice_board(image_path, rows=9, cols=16, model_input_size=(48, 4
                 print(f"warning: row {r}, col {c} empty, skip.")
     return board_img, tiles
 
+def encode_board(tiles, rows=9, cols=16) -> np.ndarray:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    MODEL_PATH = 'model/pikachu_model_best.pth'
+    bot_model = load_trained_model(MODEL_PATH, device)
+
+    # Predict
+    labels = []
+    for tile in tile_list:
+        label = predict_tile(tile, bot_model, device)
+        labels.append(label)
+
+    #reshape 9x16
+    board_labels = np.array(labels).reshape((rows, cols))
+    return board_labels
+
 if __name__ == "__main__":
     try:
-        board, tile_list = extract_and_slice_board("../board_img/image1.png", gap=2)
+        IMAGE_PATH = "../board_img/image1.png"
+        board, tile_list = extract_and_slice_board(IMAGE_PATH, gap=2)
 
-        cv2.imwrite("../cropped_board/image1.png", board)
-        if len(tile_list) >= 144:
-            cv2.imwrite("../tile_img/image1_0.png", tile_list[0])
-            cv2.imwrite("../tile_img/image1_19.png", tile_list[19])
+        matrix = encode_board(tile_list)
+        print(matrix)
+
+        # cv2.imwrite("../cropped_board/image1.png", board)
+        # if len(tile_list) >= 144:
+        #     cv2.imwrite("../tile_img/image1_0.png", tile_list[0])
+        #     cv2.imwrite("../tile_img/image1_19.png", tile_list[19])
 
     except Exception as e:
         print(f"Err: {e}")
