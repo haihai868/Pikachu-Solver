@@ -1,7 +1,8 @@
 import numpy as np
 import time
+from typing import List, Tuple
 
-def is_clear_line(matrix, p1, p2):
+def is_clear_line(matrix: np.ndarray, p1: Tuple[int, int], p2: Tuple[int, int]) -> bool:
     """Check if the line between p1 and p2 (exclusive) is entirely empty (0)."""
     r1, c1 = p1
     r2, c2 = p2
@@ -19,7 +20,7 @@ def is_clear_line(matrix, p1, p2):
         return True
     return False
 
-def can_connect_correct(matrix, p1, p2):
+def can_connect_correct(matrix: np.ndarray, p1: Tuple[int, int], p2: Tuple[int, int]) -> Tuple[bool, List[Tuple[int, int]]]:
     """Check if two matching tiles can connect with at most 2 turns.
     Returns (True, path) or (False, []).
     """
@@ -134,7 +135,7 @@ def can_connect_correct(matrix, p1, p2):
 
     return False, []
 
-def get_all_connectable_pairs(state):
+def get_all_connectable_pairs(state: np.ndarray):
     """Find all matchable pairs in the current board state."""
     pairs = []
     h, w = state.shape
@@ -158,7 +159,58 @@ def get_all_connectable_pairs(state):
                     pairs.append((p1, p2, val, path))
     return pairs
 
-def solve_backtracking(matrix: np.ndarray, timeout: float = 8.0):
+def update_board(padded_board, p1: Tuple[int, int], p2: Tuple[int, int], level: int=1):
+    row, col = padded_board.shape
+    row1, col1 = p1
+    row2, col2 = p2
+    
+
+    # remember to check edge cases
+    if level == 1:
+        padded_board[p1] = 0
+        padded_board[p2] = 0
+    elif level == 2:
+        above1 = padded_board[row1 + 1:, col1]
+        padded_board[row1:row - 1, col1] = above1
+
+        above2 = padded_board[row2 + 1:, col2]
+        padded_board[row2:row - 1, col2] = above2
+
+    elif level == 3:
+        under1 = padded_board[:row1, col1]
+        padded_board[1:row1+1, col1] = under1
+
+        under2 = padded_board[:row2, col2]
+        padded_board[1:row2+1, col2] = under2
+
+    elif level == 4:
+        right1 = padded_board[row1, col1 + 1:]
+        padded_board[row1, col1:col - 1] = right1
+
+        right2 = padded_board[row2, col2 + 1:]
+        padded_board[row2, col2:col - 1] = right2
+
+    elif level == 5:
+        left1 = padded_board[row1, :col1]
+        padded_board[row1, 1:col1+1] = left1
+
+        left2 = padded_board[row2, :col2]
+        padded_board[row2, 1:col2+1] = left2
+
+    elif level == 6:
+        pass
+    elif level == 7:
+        pass
+    elif level == 8:
+        pass
+    elif level == 9:
+        pass
+    elif level == 10:
+        pass
+    
+    return padded_board
+
+def solve_backtracking(matrix: np.ndarray, timeout: float = 8.0, level: int = 1):
     """Pads a 9x16 matrix to 11x18, solves it using backtracking,
     and returns (success, steps) with coordinates mapped back to 9x16.
     """
@@ -181,8 +233,10 @@ def solve_backtracking(matrix: np.ndarray, timeout: float = 8.0):
             
         # Try matching pairs
         for p1, p2, val, path in pairs:
-            padded[p1] = 0
-            padded[p2] = 0
+            old_padded = padded.copy()
+
+            # update board base on level
+            padded = update_board(padded, p1, p2, level)
             
             # Map path back to 9x16 space (subtract 1 from all row & col coordinates)
             mapped_path = [(r - 1, c - 1) for r, c in path]
@@ -200,8 +254,7 @@ def solve_backtracking(matrix: np.ndarray, timeout: float = 8.0):
                 return True
                 
             # Undo
-            padded[p1] = val
-            padded[p2] = val
+            padded = old_padded
             steps.pop()
             
         return False
