@@ -32,9 +32,10 @@ except Exception as e:
 
 class SolveGridRequest(BaseModel):
     grid: List[List[int]]  # 9x16 grid with values 0 (empty) or 1..36 (tile types)
+    level: Optional[int] = 1
 
 @app.post("/api/solve")
-async def solve_board_image(file: UploadFile = File(...)):
+async def solve_board_image(file: UploadFile = File(...), level: int = 1):
     if not BOT_MODEL:
         raise HTTPException(status_code=500, detail="CNN Model is not loaded on server.")
         
@@ -78,19 +79,28 @@ async def solve_board_image(file: UploadFile = File(...)):
                 
         # Try to solve the grid
         grid_np = np.array(grid_labels)
-        solve_success, steps = solve_backtracking(grid_np)
+        solve_success, steps_or_err = solve_backtracking(grid_np, level=level)
         
         # Convert board_img to Base64 (convert RGB to BGR first for OpenCV)
         board_bgr = cv2.cvtColor(board_img, cv2.COLOR_RGB2BGR)
         _, buffer_img = cv2.imencode(".png", board_bgr)
         board_base64 = base64.b64encode(buffer_img).decode("utf-8")
         
+        if not solve_success and isinstance(steps_or_err, str):
+            return {
+                "success": False,
+                "grid": grid_labels,
+                "steps": [],
+                "board_img": board_base64,
+                "error": steps_or_err
+            }
+            
         warning_msg = " ".join(warnings) if warnings else None
         
         return {
             "success": solve_success,
             "grid": grid_labels,
-            "steps": steps,
+            "steps": steps_or_err,
             "board_img": board_base64,
             "error": warning_msg
         }
@@ -109,8 +119,15 @@ async def solve_grid_only(req: SolveGridRequest):
     if grid_np.shape != (9, 16):
         raise HTTPException(status_code=400, detail="Grid shape must be 9x16.")
         
-    solve_success, steps = solve_backtracking(grid_np)
+    solve_success, steps_or_err = solve_backtracking(grid_np, level=req.level)
     
+    if not solve_success and isinstance(steps_or_err, str):
+        return {
+            "success": False,
+            "steps": [],
+            "error": steps_or_err
+        }
+        
     # Count frequencies for warnings
     frequencies = {}
     for val in req.grid:
@@ -127,7 +144,7 @@ async def solve_grid_only(req: SolveGridRequest):
     
     return {
         "success": solve_success,
-        "steps": steps,
+        "steps": steps_or_err,
         "error": warning_msg
     }
 

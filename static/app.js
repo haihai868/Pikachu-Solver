@@ -14,6 +14,8 @@ let speed = 1.0;          // Playback speed in seconds
 let isEditing = false;    // Grid editing state
 let selectedCell = null;  // Currently editing cell {row, col}
 let originalBoardBase64 = ""; // Backup of B64 board image
+let tileImages = [];      // Array of 144 cropped tile Base64 strings
+let boardStates = [];     // Array of precomputed grids (length steps.length + 1)
 
 // DOM Elements
 const uploadBox = document.getElementById("upload-box");
@@ -39,6 +41,7 @@ const solvedCount = document.getElementById("solved-count");
 const totalCount = document.getElementById("total-count");
 const progressFill = document.getElementById("progress-fill");
 const stepsList = document.getElementById("steps-list");
+const levelSelect = document.getElementById("level-select");
 
 // Modal Elements
 const editModal = document.getElementById("edit-modal");
@@ -92,6 +95,14 @@ function setupEventListeners() {
     btnEdit.addEventListener("click", toggleEditMode);
     btnSolveEdited.addEventListener("click", solveEditedGrid);
 
+    // Level Selection Change
+    levelSelect.addEventListener("change", () => {
+        stopAutoPlay();
+        if (originalBoardBase64) {
+            solveGridWithLevel();
+        }
+    });
+
     // Modal Close
     closeModal.addEventListener("click", () => editModal.style.display = "none");
     btnClearTile.addEventListener("click", () => {
@@ -102,7 +113,7 @@ function setupEventListeners() {
     });
 
     // Handle canvas resizing when board image is loaded
-    boardImage.addEventListener("load", resizeCanvas);
+    boardImage.addEventListener("load", onBoardImageLoad);
     window.addEventListener("resize", resizeCanvas);
 }
 
@@ -149,17 +160,23 @@ async function handleFileUpload(file) {
     uploadBox.querySelector(".upload-icon").className = "fa-solid fa-spinner fa-spin upload-icon";
 
     try {
-        const res = await fetch(`${API_URL}/api/solve`, {
+        const selectedLevel = parseInt(levelSelect.value);
+        const res = await fetch(`${API_URL}/api/solve?level=${selectedLevel}`, {
             method: "POST",
             body: formData
         });
 
-        if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.detail || "Không thể xử lý hình ảnh");
+        const text = await res.text();
+        let data;
+        try {
+            data = JSON.parse(text);
+        } catch (e) {
+            throw new Error(`Lỗi kết nối hoặc phản hồi không hợp lệ từ máy chủ (HTTP ${res.status})`);
         }
 
-        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.detail || "Không thể xử lý hình ảnh");
+        }
         originalBoardBase64 = data.board_img;
         
         // Save states
@@ -169,6 +186,9 @@ async function handleFileUpload(file) {
 
         // Render board UI
         renderGrid(currentGrid);
+        
+        // Show board image container (remove hidden so load event fires and calculates dimensions)
+        boardImage.classList.remove("hidden");
         renderCroppedBoard(data.board_img);
         renderStepsList();
 
@@ -190,7 +210,6 @@ async function handleFileUpload(file) {
         if (data.success && steps.length > 0) {
             playbackSection.style.display = "flex";
             totalCount.textContent = steps.length;
-            resetPlayback();
         } else {
             playbackSection.style.display = "none";
         }
@@ -297,18 +316,24 @@ function updateCell(r, c, value) {
 // Send the manually corrected grid to the backend for re-solving
 async function solveEditedGrid() {
     try {
+        const selectedLevel = parseInt(levelSelect.value);
         const res = await fetch(`${API_URL}/api/solve_grid`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ grid: currentGrid })
+            body: JSON.stringify({ grid: currentGrid, level: selectedLevel })
         });
 
-        if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.detail || "Lỗi giải grid");
+        const text = await res.text();
+        let data;
+        try {
+            data = JSON.parse(text);
+        } catch (e) {
+            throw new Error(`Lỗi kết nối hoặc phản hồi không hợp lệ từ máy chủ (HTTP ${res.status})`);
         }
 
-        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.detail || "Lỗi giải grid");
+        }
         
         // Update states
         initialGrid = JSON.parse(JSON.stringify(currentGrid));
@@ -338,12 +363,16 @@ async function solveEditedGrid() {
         document.querySelectorAll(".grid-cell").forEach(c => c.classList.remove("edit-mode"));
 
         // Setup playback
+        extractTiles(2);
+        precomputeBoardStates();
+        
         if (data.success && steps.length > 0) {
             playbackSection.style.display = "flex";
             totalCount.textContent = steps.length;
             resetPlayback();
         } else {
             playbackSection.style.display = "none";
+            resetPlayback();
         }
 
     } catch (e) {
@@ -467,30 +496,62 @@ function showStep(idx) {
 
 // Render the grid values at a specific step in history
 function showGridAtStep(stepIdx) {
-    // Clone grid
-    const tempGrid = JSON.parse(JSON.stringify(initialGrid));
-    // Clear cells of all steps up to stepIdx
-    for (let i = 0; i <= stepIdx; i++) {
-        const step = steps[i];
-        tempGrid[step.start[0]][step.start[1]] = 0;
-        tempGrid[step.end[0]][step.end[1]] = 0;
-    }
-    
-    // Sync UI elements
-    for (let r = 0; r < 9; r++) {
-        for (let c = 0; c < 16; c++) {
-            const val = tempGrid[r][c];
-            const cellIdx = r * 16 + c;
-            const cell = gridOverlay.children[cellIdx];
-            if (val === 0) {
-                cell.classList.add("empty");
-                cell.textContent = "";
-            } else {
-                cell.classList.remove("empty");
-                cell.style.setProperty("--tile-hue", val * 10);
-                cell.textContent = val;
+    if (boardStates.length > 0) {
+        // boardStates[0] is initial state (stepIdx = -1)
+        // boardStates[stepIdx + 1] is state after stepIdx
+        const state = boardStates[stepIdx + 1];
+        
+        for (let r = 0; r < 9; r++) {
+            for (let c = 0; c < 16; c++) {
+                const cellState = state[r][c];
+                const val = cellState.value;
+                const cellIdx = r * 16 + c;
+                const cell = gridOverlay.children[cellIdx];
+                
+                if (val === 0) {
+                    cell.classList.add("empty");
+                    cell.textContent = "";
+                    cell.style.backgroundImage = "none";
+                    cell.style.removeProperty("--tile-hue");
+                } else {
+                    cell.classList.remove("empty");
+                    cell.style.setProperty("--tile-hue", val * 10);
+                    if (cellState.imageSrc) {
+                        cell.style.backgroundImage = `url(${cellState.imageSrc})`;
+                        cell.style.backgroundSize = "cover";
+                    } else {
+                        cell.style.backgroundImage = "none";
+                    }
+                    cell.textContent = val;
+                }
+                cell.classList.remove("matched-highlight", "fade-out");
             }
-            cell.classList.remove("matched-highlight", "fade-out");
+        }
+    } else {
+        // Fallback
+        const tempGrid = JSON.parse(JSON.stringify(initialGrid));
+        for (let i = 0; i <= stepIdx; i++) {
+            const step = steps[i];
+            tempGrid[step.start[0]][step.start[1]] = 0;
+            tempGrid[step.end[0]][step.end[1]] = 0;
+        }
+        for (let r = 0; r < 9; r++) {
+            for (let c = 0; c < 16; c++) {
+                const val = tempGrid[r][c];
+                const cellIdx = r * 16 + c;
+                const cell = gridOverlay.children[cellIdx];
+                if (val === 0) {
+                    cell.classList.add("empty");
+                    cell.textContent = "";
+                    cell.style.backgroundImage = "none";
+                } else {
+                    cell.classList.remove("empty");
+                    cell.style.setProperty("--tile-hue", val * 10);
+                    cell.textContent = val;
+                    cell.style.backgroundImage = "none";
+                }
+                cell.classList.remove("matched-highlight", "fade-out");
+            }
         }
     }
 }
@@ -640,6 +701,295 @@ function updatePlaybackUI() {
             activeItem.classList.add("active");
             activeItem.scrollIntoView({ block: "nearest", behavior: "smooth" });
         }
+    }
+}
+
+// Image loaded handler
+function onBoardImageLoad() {
+    resizeCanvas();
+    extractTiles(2);
+    boardImage.classList.add("hidden");
+    precomputeBoardStates();
+    resetPlayback();
+}
+
+// Gap-aware slicing of tiles from board image
+function extractTiles(gap = 2) {
+    tileImages = [];
+    const img = boardImage;
+    if (!img.naturalWidth) return;
+    
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    
+    const naturalW = img.naturalWidth;
+    const naturalH = img.naturalHeight;
+    
+    const tileW = (naturalW - (16 - 1) * gap) / 16;
+    const tileH = (naturalH - (9 - 1) * gap) / 9;
+    
+    canvas.width = tileW;
+    canvas.height = tileH;
+    
+    for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 16; c++) {
+            const sx = c * (tileW + gap);
+            const sy = r * (tileH + gap);
+            
+            ctx.clearRect(0, 0, tileW, tileH);
+            ctx.drawImage(img, sx, sy, tileW, tileH, 0, 0, tileW, tileH);
+            
+            const dataUrl = canvas.toDataURL("image/png");
+            tileImages.push(dataUrl);
+        }
+    }
+}
+
+// Shift logic matching 9 Pikachu levels
+function applyGravityJS(grid, level) {
+    if (level === 1) return grid;
+    const rows = 9;
+    const cols = 16;
+    
+    // Column-based shifting (Level 2, 3, 6, 7)
+    if (level === 2 || level === 3 || level === 6 || level === 7) {
+        for (let c = 0; c < cols; c++) {
+            const activeCol = [];
+            for (let r = 0; r < rows; r++) {
+                activeCol.push(grid[r][c]);
+            }
+            const nonZeros = activeCol.filter(cell => cell.value !== 0);
+            
+            if (level === 2) { // Down
+                const emptyCount = rows - nonZeros.length;
+                const newCol = [];
+                for (let r = 0; r < emptyCount; r++) {
+                    newCol.push({ value: 0, imageSrc: null });
+                }
+                newCol.push(...nonZeros);
+                for (let r = 0; r < rows; r++) {
+                    grid[r][c] = newCol[r];
+                }
+            } else if (level === 3) { // Up
+                const emptyCount = rows - nonZeros.length;
+                const newCol = [...nonZeros];
+                for (let r = 0; r < emptyCount; r++) {
+                    newCol.push({ value: 0, imageSrc: null });
+                }
+                for (let r = 0; r < rows; r++) {
+                    grid[r][c] = newCol[r];
+                }
+            } else if (level === 6) { // Vertical Center
+                const topHalf = activeCol.slice(0, 5);
+                const botHalf = activeCol.slice(5, 9);
+                
+                const topNonZeros = topHalf.filter(cell => cell.value !== 0);
+                const botNonZeros = botHalf.filter(cell => cell.value !== 0);
+                
+                const newTop = [];
+                const topEmpty = 5 - topNonZeros.length;
+                for (let r = 0; r < topEmpty; r++) {
+                    newTop.push({ value: 0, imageSrc: null });
+                }
+                newTop.push(...topNonZeros);
+                
+                const newBot = [...botNonZeros];
+                const botEmpty = 4 - botNonZeros.length;
+                for (let r = 0; r < botEmpty; r++) {
+                    newBot.push({ value: 0, imageSrc: null });
+                }
+                
+                const newCol = [...newTop, ...newBot];
+                for (let r = 0; r < rows; r++) {
+                    grid[r][c] = newCol[r];
+                }
+            } else if (level === 7) { // Vertical Sides
+                const topHalf = activeCol.slice(0, 5);
+                const botHalf = activeCol.slice(5, 9);
+                
+                const topNonZeros = topHalf.filter(cell => cell.value !== 0);
+                const botNonZeros = botHalf.filter(cell => cell.value !== 0);
+                
+                const newTop = [...topNonZeros];
+                const topEmpty = 5 - topNonZeros.length;
+                for (let r = 0; r < topEmpty; r++) {
+                    newTop.push({ value: 0, imageSrc: null });
+                }
+                
+                const newBot = [];
+                const botEmpty = 4 - botNonZeros.length;
+                for (let r = 0; r < botEmpty; r++) {
+                    newBot.push({ value: 0, imageSrc: null });
+                }
+                newBot.push(...botNonZeros);
+                
+                const newCol = [...newTop, ...newBot];
+                for (let r = 0; r < rows; r++) {
+                    grid[r][c] = newCol[r];
+                }
+            }
+        }
+    }
+    // Row-based shifting (Level 4, 5, 8, 9)
+    else if (level === 4 || level === 5 || level === 8 || level === 9) {
+        for (let r = 0; r < rows; r++) {
+            const activeRow = grid[r];
+            const nonZeros = activeRow.filter(cell => cell.value !== 0);
+            
+            if (level === 4) { // Left
+                const emptyCount = cols - nonZeros.length;
+                const newRow = [...nonZeros];
+                for (let c = 0; c < emptyCount; c++) {
+                    newRow.push({ value: 0, imageSrc: null });
+                }
+                grid[r] = newRow;
+            } else if (level === 5) { // Right
+                const emptyCount = cols - nonZeros.length;
+                const newRow = [];
+                for (let c = 0; c < emptyCount; c++) {
+                    newRow.push({ value: 0, imageSrc: null });
+                }
+                newRow.push(...nonZeros);
+                grid[r] = newRow;
+            } else if (level === 8) { // Horizontal Center
+                const leftHalf = activeRow.slice(0, 8);
+                const rightHalf = activeRow.slice(8, 16);
+                
+                const leftNonZeros = leftHalf.filter(cell => cell.value !== 0);
+                const rightNonZeros = rightHalf.filter(cell => cell.value !== 0);
+                
+                const newLeft = [];
+                const leftEmpty = 8 - leftNonZeros.length;
+                for (let c = 0; c < leftEmpty; c++) {
+                    newLeft.push({ value: 0, imageSrc: null });
+                }
+                newLeft.push(...leftNonZeros);
+                
+                const newRight = [...rightNonZeros];
+                const rightEmpty = 8 - rightNonZeros.length;
+                for (let c = 0; c < rightEmpty; c++) {
+                    newRight.push({ value: 0, imageSrc: null });
+                }
+                
+                grid[r] = [...newLeft, ...newRight];
+            } else if (level === 9) { // Horizontal Sides
+                const leftHalf = activeRow.slice(0, 8);
+                const rightHalf = activeRow.slice(8, 16);
+                
+                const leftNonZeros = leftHalf.filter(cell => cell.value !== 0);
+                const rightNonZeros = rightHalf.filter(cell => cell.value !== 0);
+                
+                const newLeft = [...leftNonZeros];
+                const leftEmpty = 8 - leftNonZeros.length;
+                for (let c = 0; c < leftEmpty; c++) {
+                    newLeft.push({ value: 0, imageSrc: null });
+                }
+                
+                const newRight = [];
+                const rightEmpty = 8 - rightNonZeros.length;
+                for (let c = 0; c < rightEmpty; c++) {
+                    newRight.push({ value: 0, imageSrc: null });
+                }
+                newRight.push(...rightNonZeros);
+                
+                grid[r] = [...newLeft, ...newRight];
+            }
+        }
+    }
+    
+    return grid;
+}
+
+// Precompute the grid values and cropped images for all steps
+function precomputeBoardStates() {
+    boardStates = [];
+    if (tileImages.length === 0) return;
+    
+    // Initial state (stepIndex = -1)
+    let currentGridState = [];
+    for (let r = 0; r < 9; r++) {
+        const row = [];
+        for (let c = 0; c < 16; c++) {
+            const val = initialGrid[r][c];
+            row.push({
+                value: val,
+                imageSrc: val !== 0 ? tileImages[r * 16 + c] : null
+            });
+        }
+        currentGridState.push(row);
+    }
+    boardStates.push(JSON.parse(JSON.stringify(currentGridState)));
+    
+    // Process each step
+    const selectedLevel = parseInt(levelSelect.value);
+    for (let i = 0; i < steps.length; i++) {
+        const step = steps[i];
+        const r1 = step.start[0];
+        const c1 = step.start[1];
+        const r2 = step.end[0];
+        const c2 = step.end[1];
+        
+        currentGridState[r1][c1] = { value: 0, imageSrc: null };
+        currentGridState[r2][c2] = { value: 0, imageSrc: null };
+        
+        currentGridState = applyGravityJS(currentGridState, selectedLevel);
+        boardStates.push(JSON.parse(JSON.stringify(currentGridState)));
+    }
+}
+
+// Trigger solve_grid with level query/body parameters
+async function solveGridWithLevel() {
+    const selectedLevel = parseInt(levelSelect.value);
+    try {
+        const res = await fetch(`${API_URL}/api/solve_grid`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ grid: initialGrid, level: selectedLevel })
+        });
+
+        const text = await res.text();
+        let data;
+        try {
+            data = JSON.parse(text);
+        } catch (e) {
+            throw new Error(`Lỗi kết nối hoặc phản hồi không hợp lệ từ máy chủ (HTTP ${res.status})`);
+        }
+
+        if (!res.ok) {
+            throw new Error(data.detail || "Lỗi giải grid");
+        }
+        steps = data.steps;
+
+        // Render steps sidebar
+        renderStepsList();
+
+        // Warning messages
+        if (data.error) {
+            warningBox.style.display = "flex";
+            warningText.textContent = data.error;
+        } else {
+            warningBox.style.display = "none";
+        }
+
+        // Adjust state
+        boardStatus.textContent = data.success ? "Đã giải thành công" : "Bảng bị kẹt / Lỗi khớp cặp";
+        boardStatus.className = data.success ? "badge active" : "badge";
+
+        // Setup playback
+        extractTiles(2);
+        precomputeBoardStates();
+        
+        if (data.success && steps.length > 0) {
+            playbackSection.style.display = "flex";
+            totalCount.textContent = steps.length;
+            resetPlayback();
+        } else {
+            playbackSection.style.display = "none";
+            resetPlayback();
+        }
+
+    } catch (e) {
+        alert("Lỗi giải bảng: " + e.message);
     }
 }
 

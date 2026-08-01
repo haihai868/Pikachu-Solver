@@ -1,15 +1,30 @@
 # Pikachu Solver
 
-This project detects a Classic Pikachu board in an image, extracts the tile layout, finds matching pairs with a pathfinding check, and saves a visualization of the solved moves.
+Giải game Pikachu cổ điển với **9 levels**.
 
-## Quick start
+---
+
+## Tính năng
+
+1. Upload ảnh chụp màn hình game Pikachu, hệ thống tự cắt bảng và nhận diện 36 loại hình ảnh Pokemon.
+2. Hỗ trợ 9 levels.
+3. Đường vẽ kết nối sinh động, hiển thị trạng thái bảng dịch chuyển thực tế sau mỗi bước đi. Cho phép đi tiếp, lùi lại hoặc chạy tự động với thanh điều chỉnh tốc độ.
+4. Chỉnh sửa thủ công các ô nhận diện sai qua bảng chọn Pokemon trước khi giải.
+
+---
+
+## Cài đặt và chạy
+
+Python 3.8+. Chạy lệnh:
 
 ```bash
-python main.py path/to/board.png --rows 9 --cols 16 --output-dir output
+pip install -r requirements.txt
 ```
+```bash
+python app.py
+```
+Truy cập: **[http://127.0.0.1:8000](http://127.0.0.1:8000)**
 
-## Notes
+## Lỗi
 
-- The board detector is intentionally lightweight and may need a clearer screenshot for best results.
-- The solver uses a path search that allows direct, L-shaped, and U/Z-shaped routes with up to two turns.
-- Use the optional `--gravity` flag if your board version shifts tiles after matches.
+level 2 trở đi có thể phải có 1 lần đổi vị trí thì chưa xử lý được
